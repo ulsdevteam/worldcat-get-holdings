@@ -12,7 +12,6 @@ class WorldCatSearchClient
     private string ClientSecret { get; }
     private string AccessToken { get; set; }
     private DateTimeOffset AccessTokenExpiresAt { get; set; }
-    private Dictionary<string, JObject> CachedHoldingsResponses { get; } = new Dictionary<string, JObject>();
 
     public WorldCatSearchClient(string clientId, string clientSecret)
     {
@@ -29,7 +28,6 @@ class WorldCatSearchClient
             {
                 var authResponse = await OAuthUrl
                     .WithBasicAuth(ClientId, ClientSecret)
-                    // .WithHeader("Authorization", "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{ClientId}:{ClientSecret}")))
                     .PostUrlEncodedAsync(new 
                     {
                         grant_type = "client_credentials",
@@ -51,12 +49,10 @@ class WorldCatSearchClient
 
     public async Task<JObject> GetHoldings(string oclcControlNumber)
     {
-        if (CachedHoldingsResponses.TryGetValue(oclcControlNumber, out var cached)) return cached;
         try
         {
             var response = await Client.Request("bibs-holdings").SetQueryParam("oclcNumber", oclcControlNumber).GetStringAsync();
             var responseJson = JsonConvert.DeserializeObject<JObject>(response);
-            CachedHoldingsResponses.Add(oclcControlNumber, responseJson);
             return responseJson;
         }
         catch (FlurlHttpException e)
