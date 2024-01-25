@@ -50,26 +50,45 @@ await Parser.Default.ParseArguments<Options>(args).WithParsedAsync(async options
         foreach (var oclcControlNumber in oclcControlNumbers)
         {
             if (mergedNumbers.Contains(oclcControlNumber)) continue;
-            try
+            var tryAgain = false;
+            var numberOfTries = 0;
+            do
             {
-                var holdings = await worldCatClient.GetHoldings(oclcControlNumber);
-                if (holdings.ContainsKey("briefRecords"))
+                try
                 {
-                    foreach (var record in holdings["briefRecords"].Cast<JObject>())
+                    var holdings = await worldCatClient.GetHoldings(oclcControlNumber);
+                    if (holdings.ContainsKey("briefRecords"))
                     {
-                        if (record.ContainsKey("mergedOclcNumbers"))
+                        foreach (var record in holdings["briefRecords"].Cast<JObject>())
                         {
-                            mergedNumbers.UnionWith(record["mergedOclcNumbers"].Select(x => x.ToString()));
+                            if (record.ContainsKey("mergedOclcNumbers"))
+                            {
+                                mergedNumbers.UnionWith(record["mergedOclcNumbers"].Select(x => x.ToString()));
+                            }
+                            holdingCounts.Add((record["oclcNumber"].ToString(), record["institutionHolding"]?["briefHoldings"]?.Count() ?? 1));
                         }
-                        holdingCounts.Add((record["oclcNumber"].ToString(), record["institutionHolding"]["briefHoldings"].Count()));
                     }
                 }
-            }
-            catch (FlurlHttpException e) when (e.StatusCode == 400)
-            {
-                Console.Error.WriteLine($"row {row.RowNumber}, oclcNumber {oclcControlNumber} errored:");
-                Console.Error.WriteLine(await e.GetResponseStringAsync());
-            }
+                catch (FlurlHttpException e) when (e.StatusCode == 400)
+                {
+                    Console.Error.WriteLine($"row {row.RowNumber}, oclcNumber {oclcControlNumber} errored:");
+                    Console.Error.WriteLine(await e.GetResponseStringAsync());
+                }
+                catch (FlurlHttpException e) when (e.StatusCode == 500)
+                {
+                    numberOfTries++;
+                    Console.Error.WriteLine($"row {row.RowNumber}, oclcNumber {oclcControlNumber} errored (attempt {numberOfTries}):");
+                    if (numberOfTries >= 3) throw;
+                    Console.Error.WriteLine(await e.GetResponseStringAsync());
+                    tryAgain = true;
+                    await Task.Delay(TimeSpan.FromMinutes(1));
+                }
+                catch (Exception)
+                {
+                    Console.Error.WriteLine($"row {row.RowNumber}, oclcNumber {oclcControlNumber} errored:");
+                    throw;
+                }
+            } while (tryAgain);
         }
         foreach (var field in row.Cells.Select(cell => cell.Value))
         {
@@ -77,7 +96,7 @@ await Parser.Default.ParseArguments<Options>(args).WithParsedAsync(async options
         }
         if (holdingCounts.Any())
         {
-            var (oclcNumber, libraryCount) =  holdingCounts.MaxBy(x => x.Item2);
+            var (oclcNumber, libraryCount) = holdingCounts.MaxBy(x => x.Item2);
             csv.WriteField(oclcNumber);
             csv.WriteField(libraryCount);
             csv.WriteField(GetSummary(libraryCount));
@@ -90,7 +109,8 @@ await Parser.Default.ParseArguments<Options>(args).WithParsedAsync(async options
             }
         }
         csv.NextRecord();
-        if (options.To is not null && row.RowNumber == options.To) {
+        if (options.To is not null && row.RowNumber == options.To)
+        {
             break;
         }
     }
